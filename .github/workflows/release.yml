@@ -28,16 +28,16 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact-name: wally-package-types-win64
+            artifact-name: lune-wally-package-types-win64
             cargo-target: x86_64-pc-windows-msvc
           - os: ubuntu-18.04
-            artifact-name: wally-package-types-linux
+            artifact-name: lune-wally-package-types-linux
             cargo-target: x86_64-unknown-linux-gnu
           - os: macos-latest
-            artifact-name: wally-package-types-macos
+            artifact-name: lune-wally-package-types-macos
             cargo-target: x86_64-apple-darwin
           - os: macos-latest
-            artifact-name: wally-package-types-macos-aarch64
+            artifact-name: lune-wally-package-types-macos-aarch64
             cargo-target: x86_64-apple-darwin
 
     name: Build (${{ matrix.artifact-name }})
@@ -64,11 +64,11 @@ jobs:
           mkdir -p staging
 
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "output/release/wally-package-types.exe" staging/
+            cp "output/release/lune-wally-package-types.exe" staging/
             cd staging
             7z a ../release.zip *
           else
-            cp "output/release/wally-package-types" staging/
+            cp "output/release/lune-wally-package-types" staging/
             cd staging
             zip ../release.zip *
           fi
