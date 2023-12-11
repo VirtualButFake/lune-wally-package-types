@@ -1,3 +1,4 @@
+use core::panic;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -7,77 +8,26 @@ use full_moon::{
         punctuated::{Pair, Punctuated},
         span::ContainedSpan,
         types::{ExportedTypeDeclaration, GenericParameterInfo, IndexedTypeInfo, TypeInfo},
-        Call, Expression, FunctionArgs, Index, LastStmt, LocalAssignment, Return, Stmt, Suffix,
-        Value, Var,
+        Call, Expression, FunctionArgs, LastStmt, LocalAssignment, Return, Stmt, Suffix, Value,
     },
     tokenizer::{Token, TokenReference, TokenType},
 };
-
-use serde::Deserialize;
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct SourcemapNode {
-    name: String,
-    class_name: String,
-    #[serde(default)]
-    file_paths: Vec<PathBuf>,
-    #[serde(default)]
-    children: Vec<SourcemapNode>,
-}
-
-impl SourcemapNode {
-    fn find_child(&self, name: String) -> Option<&SourcemapNode> {
-        self.children.iter().find(|child| child.name == name)
-    }
-}
-
-fn mutate_sourcemap(node: &mut SourcemapNode) {
-    node.file_paths = node
-        .file_paths
-        .iter()
-        .map(|path| {
-            path.canonicalize()
-                .unwrap_or_else(|_| panic!("failed to canonicalize {}", path.display()))
-        })
-        .collect();
-
-    for child in &mut node.children {
-        mutate_sourcemap(child);
-    }
-}
 
 fn expression_to_components(expression: &Expression) -> Vec<String> {
     let mut components = Vec::new();
 
     match expression {
         Expression::Value { value, .. } => match &**value {
-            Value::Var(Var::Expression(var_expression)) => {
-                components.push(var_expression.prefix().to_string().trim().to_string());
+            Value::String(token_reference) => {
+                // fill components with this string seperated by "/"
+                // cut off first and last character of string (the quotes)
+                let string = token_reference.token().to_string();
 
-                for suffix in var_expression.suffixes() {
-                    match suffix {
-                        Suffix::Index(index) => match index {
-                            Index::Dot { name, .. } => {
-                                components.push(name.to_string().trim().to_string());
-                            }
-                            Index::Brackets { expression, .. } => match expression {
-                                Expression::Value { value, .. } => match &**value {
-                                    Value::String(name) => match name.token_type() {
-                                        TokenType::StringLiteral { literal, .. } => {
-                                            components.push(literal.trim().to_string());
-                                        }
-                                        _ => panic!("non-string brackets index"),
-                                    },
-                                    _ => panic!("non-string brackets index"),
-                                },
-                                _ => panic!("non-string brackets index"),
-                            },
-                            _ => panic!("unknown index"),
-                        },
-                        _ => panic!("incorrect suffix"),
-                    }
-                }
+                components = string
+                    .trim_matches('"')
+                    .split("/")
+                    .map(|s| s.to_string())
+                    .collect();
             }
             _ => panic!("unknown require expression"),
         },
@@ -87,9 +37,37 @@ fn expression_to_components(expression: &Expression) -> Vec<String> {
     components
 }
 
-fn match_require(expression: &Expression) -> Option<Vec<String>> {
+fn revert_node_to_orig(first_node: &Stmt) -> Option<Expression> {
+    match first_node {
+        Stmt::LocalAssignment(local_assignment) => {
+            if local_assignment
+                .names()
+                .first()
+                .unwrap()
+                .value()
+                .token()
+                .to_string()
+                == "REQUIRED_MODULE"
+            {
+                return Some(
+                    local_assignment
+                        .expressions()
+                        .last()
+                        .unwrap()
+                        .value()
+                        .clone(),
+                );
+            }
+        }
+        _ => {}
+    }
+
+    return None;
+}
+
+fn match_require(expression: Expression) -> Option<Vec<String>> {
     match expression {
-        Expression::Value { value, .. } => match &**value {
+        Expression::Value { value, .. } => match &*value {
             Value::FunctionCall(call) => {
                 if call.prefix().to_string().trim() == "require" && call.suffixes().count() == 1 {
                     if let Suffix::Call(Call::AnonymousCall(FunctionArgs::Parentheses {
@@ -107,7 +85,9 @@ fn match_require(expression: &Expression) -> Option<Vec<String>> {
                     panic!("unknown require expression");
                 }
             }
-            _ => panic!("unknown require expression"),
+            _ => {
+                panic!("unknown require expression");
+            }
         },
         _ => panic!("unknown require expression"),
     }
@@ -174,35 +154,12 @@ fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTypeDe
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
 pub struct Command {
-    /// Path to sourcemap
-    #[clap(short, long, value_parser)]
-    pub sourcemap: PathBuf,
-
     /// Path to packages
     #[clap(value_parser)]
     pub packages_folder: PathBuf,
 }
 
-fn find_node(root: &SourcemapNode, path: PathBuf) -> Option<Vec<&SourcemapNode>> {
-    let mut stack = vec![vec![root]];
-
-    while let Some(node_path) = stack.pop() {
-        let node = node_path.last().unwrap();
-        if node.file_paths.contains(&path.to_path_buf()) {
-            return Some(node_path);
-        }
-
-        for child in &node.children {
-            let mut path = node_path.clone();
-            path.push(child);
-            stack.push(path);
-        }
-    }
-
-    None
-}
-
-fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<()> {
+fn mutate_thunk(path: &Path) -> Result<()> {
     println!("Mutating {}", path.display());
 
     // The entry should be a thunk
@@ -213,44 +170,58 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<()> {
     let mut type_declarations_created = false;
 
     if let Some(LastStmt::Return(r#return)) = parsed_code.nodes().last_stmt() {
-        let returned_expression = r#return.returns().iter().next().unwrap();
+        let mut returned_expression = r#return.returns().iter().next().unwrap().clone();
+
+        let first_node = parsed_code.nodes().stmts().next();
+
+        if !first_node.is_none() {
+            returned_expression = revert_node_to_orig(first_node.unwrap())
+                .expect("Could not revert node to original expression");
+        }
+
         let path_components =
-            match_require(returned_expression).expect("could not resolve path for require");
+            match_require(returned_expression.clone()).expect("could not resolve path for require");
 
         println!("Found require in format {}", path_components.join("/"));
 
-        let mut iter = path_components.iter();
-        let first_in_chain = iter.next().expect("No path components");
-        assert!(first_in_chain == "script" || first_in_chain == "game");
+        // resolve the file path relative to this path (the file path is in the return statement)
+        // make file_path relative to the passed Path
+        let mut file_path = path
+            .parent()
+            .expect("Could not find path parent")
+            .to_path_buf();
 
-        let mut node_path = if first_in_chain == "script" {
-            find_node(root, path.canonicalize()?).expect("could not find node path")
-        } else {
-            vec![root]
-        };
+        for component in path_components {
+            file_path.push(component);
+        }
 
-        for component in iter {
-            if component == "Parent" {
-                node_path.pop().expect("No parent available");
+        if std::fs::metadata(file_path.clone())
+            .expect("Could not find file path specified, try re-installing packages.")
+            .is_dir()
+        {
+            // read directory
+            let files = std::fs::read_dir(file_path.clone())?;
+
+            // find first "init.lua(u)" file in this directory
+            let mut init_file = None;
+
+            for file in files {
+                let file = file?;
+                if file.file_name() == "init.lua" || file.file_name() == "init.luau" {
+                    init_file = Some(file);
+                    break;
+                }
+            }
+
+            if let Some(init_file) = init_file {
+                file_path = init_file.path();
             } else {
-                node_path.push(
-                    node_path
-                        .last()
-                        .unwrap()
-                        .find_child(component.to_string())
-                        .expect("unable to find child"),
+                panic!(
+                    "could not find init.lua(u) file in directory {}",
+                    file_path.display()
                 );
             }
         }
-
-        let current = node_path.last().unwrap();
-        let file_path = current.file_paths.get(0).expect("No file path for require");
-        println!(
-            "Required file is {} [{}], located at {}",
-            current.name,
-            current.class_name,
-            file_path.display()
-        );
 
         new_stmts.push((
             Stmt::LocalAssignment(
@@ -265,7 +236,9 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<()> {
                     .collect(),
                 )
                 .with_equal_token(Some(TokenReference::symbol(" = ").unwrap()))
-                .with_expressions(r#return.returns().clone()),
+                .with_expressions(
+                    std::iter::once(Pair::End(returned_expression.clone())).collect(),
+                ),
             ),
             None,
         ));
@@ -321,11 +294,15 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<()> {
     Ok(())
 }
 
-fn handle_index_directory(path: &Path, root: &SourcemapNode) -> Result<()> {
+fn handle_index_directory(path: &Path) -> Result<()> {
     for package_entry in std::fs::read_dir(path)?.flatten() {
         for thunk in std::fs::read_dir(package_entry.path())?.flatten() {
-            if thunk.file_type().unwrap().is_file() {
-                mutate_thunk(&thunk.path(), root)?;
+            if thunk.file_type().unwrap().is_file()
+                && (thunk.path().extension().unwrap() == "lua"
+                    || thunk.path().extension().unwrap() == "luau")
+            {
+                println!("!!! mutating {}", thunk.path().display());
+                mutate_thunk(&thunk.path())?;
             }
         }
     }
@@ -335,20 +312,13 @@ fn handle_index_directory(path: &Path, root: &SourcemapNode) -> Result<()> {
 
 impl Command {
     pub fn run(&self) -> Result<()> {
-        let sourcemap_contents = std::fs::read_to_string(&self.sourcemap)?;
-        let mut sourcemap: SourcemapNode = serde_json::from_str(&sourcemap_contents)?;
-
-        // Mutate the sourcemap so that all file paths are canonicalized for simplicity
-        // And that they contain pointers to their parent
-        mutate_sourcemap(&mut sourcemap);
-
         for entry in std::fs::read_dir(&self.packages_folder)?.flatten() {
-            if entry.file_name() == "_Index" {
-                handle_index_directory(&entry.path(), &sourcemap)?;
+            if entry.file_name() == "_index" {
+                handle_index_directory(&entry.path())?;
                 continue;
             }
 
-            mutate_thunk(&entry.path(), &sourcemap)?;
+            mutate_thunk(&entry.path())?;
         }
 
         Ok(())

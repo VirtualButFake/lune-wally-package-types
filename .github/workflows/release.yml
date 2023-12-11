@@ -88,19 +88,3 @@ jobs:
           asset_path: release.zip
           asset_name: ${{ matrix.artifact-name }}.zip
           asset_content_type: application/octet-stream
-
-  release_cargo:
-    name: Publish to cargo
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
-
-      - name: Publish to cargo
-        run: cargo publish --token ${{ secrets.CARGO_TOKEN }}
