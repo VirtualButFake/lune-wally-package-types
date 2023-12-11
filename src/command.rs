@@ -14,8 +14,6 @@ use full_moon::{
 };
 
 fn expression_to_components(expression: &Expression) -> Vec<String> {
-    let mut components = Vec::new();
-
     match expression {
         Expression::Value { value, .. } => match &**value {
             Value::String(token_reference) => {
@@ -23,7 +21,7 @@ fn expression_to_components(expression: &Expression) -> Vec<String> {
                 // cut off first and last character of string (the quotes)
                 let string = token_reference.token().to_string();
 
-                components = string
+                return string
                     .trim_matches('"')
                     .split("/")
                     .map(|s| s.to_string())
@@ -33,8 +31,6 @@ fn expression_to_components(expression: &Expression) -> Vec<String> {
         },
         _ => panic!("unknown require expression"),
     };
-
-    components
 }
 
 fn revert_node_to_orig(first_node: &Stmt) -> Option<Expression> {
