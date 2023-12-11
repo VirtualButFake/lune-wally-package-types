@@ -297,7 +297,7 @@ fn handle_index_directory(path: &Path) -> Result<()> {
                 && (thunk.path().extension().unwrap() == "lua"
                     || thunk.path().extension().unwrap() == "luau")
             {
-                println!("!!! mutating {}", thunk.path().display());
+                println!("mutating {}", thunk.path().display());
                 mutate_thunk(&thunk.path())?;
             }
         }
