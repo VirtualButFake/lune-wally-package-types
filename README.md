@@ -1,17 +1,2 @@
 # Wally Package Types Fixer
-
-A small tool which fixes the issue of [wally](https://github.com/UpliftGames/wally) thunks not including exported types, necessary for proper Luau type checking support.
-
-The tool takes in a path to a Packages folder, as well as a path to a generated sourcemap, and attempts to retrieve the relevant types and append them to the top of the package thunk
-
-Generate a sourcemap (Rojo 7.1.0+) using
-
-```
-rojo sourcemap default.project.json --output sourcemap.json
-```
-
-then run
-
-```
-wally-package-types --sourcemap sourcemap.json Packages/
-```
+This project has been archived because I am no longer interested in maintaining it. I believe that the number of separate package managers for Lune has become too large, and the effectiveness of a package manager is greatest when a single one is widely adopted. Therefore, I have decided to archive this project in favor of more promising ones, such as [npmluau](https://github.com/seaofvoices/npmluau) and/or a standalone package manager that has been discussed in the Roblox OSS server.
